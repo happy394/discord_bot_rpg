@@ -111,6 +111,9 @@ class RpgBot(commands.Cog):
 
         main_message = await ctx.reply("👀 Oh no! There is only one button...", view=view)
 
+# TODO 1. make confirm button inside 3rd button
+# TODO 2. create class to search for loot based on location
+
 
 bot = commands.Bot(command_prefix=BOT_PREFIX, intents=Intents.all())
 bot.add_cog(RpgBot())
