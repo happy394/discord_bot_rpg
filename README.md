@@ -1,2 +1,2 @@
-# discord_music_bot
-This bot will turn on music in a voice chat.
+# discord_bot_rpg
+This bot will give you access to fascinating adventures.
