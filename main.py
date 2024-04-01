@@ -1,20 +1,5 @@
-import mysql.connector
-
-from settings import *
 from Content.Classes import *
 from Content.Texts import *
-
-
-# connect to database
-def connect_database():
-    connection = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME
-    )
-    print('[*] Connected to database: %s' % DB_NAME)
-    return connection
 
 
 # discord commands
@@ -24,8 +9,8 @@ class RpgBot(commands.Cog):
 
     def add_user_to_db(self, user_id, name, age, race, clas):
         cursor = self.db.cursor(buffered=True)
-        sql_formula = ("INSERT INTO characters (user_id, name, age, race, class, attack, defence, money) "
-                       "VALUES (%s, %s, %s, %s, %s, 5, 5, 0)")
+        sql_formula = ("INSERT INTO characters (user_id, name, age, race, class, location, attack, defence, money) "
+                       "VALUES (%s, %s, %s, %s, %s, 'forest', 5, 5, 0)")
         cursor.execute(sql_formula, (user_id, name, age, race, clas))
         self.db.commit()
 
@@ -47,8 +32,8 @@ class RpgBot(commands.Cog):
         await bot.change_presence(activity=Game(name="long swords"))
         print("[*] Connected to discord as: %s" % bot.user.name)
 
-    @commands.command(name="profile", description="starts the rpg session", pass_context=True)
-    async def profile(self, ctx):
+    @commands.command(name="profile", description="shows users info", pass_context=True)
+    async def _profile(self, ctx):
         user_id = ctx.author.id
         channel = ctx.channel
         button1 = Button(label="Your character", style=ButtonStyle.gray, disabled=False)
@@ -110,6 +95,11 @@ class RpgBot(commands.Cog):
         view.add_item(button1)
 
         main_message = await ctx.reply("👀 Oh no! There is only one button...", view=view)
+
+    @commands.command(name="rpg", description="starts the rpg session", pass_context=True)
+    async def _rpg(self, ctx):
+        user_id = ctx.author.id
+        channel = ctx.channel
 
 # TODO 1. make confirm button inside 3rd button
 # TODO 2. create class to search for loot based on location
