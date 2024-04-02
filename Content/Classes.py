@@ -6,7 +6,7 @@ from discord.ext import commands
 from settings import *
 import mysql.connector
 
-import enum, random, sys
+import enum, random, sys, pickle
 from copy import deepcopy
 
 
@@ -20,6 +20,14 @@ def connect_database():
     )
     print('[*] Connected to database: %s' % DB_NAME)
     return connection
+
+
+db = connect_database()
+
+
+# Helper functions
+def str_to_class(classname):
+    return getattr(sys.modules[__name__], classname)
 
 
 # Game modes
@@ -53,23 +61,15 @@ class Actor:
         return self.attack, other.hp <= 0  # (damage, fatal)
 
 
-# Helper functions
-def str_to_class(classname):
-    return getattr(sys.modules[__name__], classname)
-
-
-class _Character(Actor):
-
+class Character_(Actor):
+    db = db
     level_cap = 10
 
-    def __init__(self, db, name, hp, max_hp, attack, defense, mana, level, xp, gold, inventory, mode, battling, user_id):
+    def __init__(self, name, hp, max_hp, attack, defense, xp, gold, inventory, mana, level, mode, battling, location, user_id):
         super().__init__(name, hp, max_hp, attack, defense, xp, gold)
-        self.db = db
+        self.inventory = inventory
         self.mana = mana
         self.level = level
-
-        self.inventory = inventory
-
         self.mode = mode
 
         if battling is not None:
@@ -79,17 +79,17 @@ class _Character(Actor):
         else:
             self.battling = None
 
+        self.location = location
         self.user_id = user_id
 
     def save_to_db(self):
         character_dict = deepcopy(vars(self))
+        print(self.battling)
         if self.battling is not None:
             character_dict["battling"] = deepcopy(vars(self.battling))
         cursor = self.db.cursor(buffered=True)
-        sql_formula = ("INSERT INTO characters_2 (name, hp, max_hp, attack, defense, mana, level, xp, gold, "
-                       "inventory, mode, battling, user_id)"
-                       "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
-        cursor.execute(sql_formula, (self.name, self.hp, self.max_hp, self.attack, self.defense, self.mana, self.level, self.xp, self.gold, self.inventory, self.mode, self.battling, self.user_id))
+        sql_formula = f"UPDATE characters_2 SET battling = %s WHERE user_id = {self.user_id}"
+        cursor.execute(sql_formula, [pickle.dumps(self.battling)])
         self.db.commit()
 
     def hunt(self):
@@ -105,6 +105,7 @@ class _Character(Actor):
         # Enter battle mode
         self.mode = GameMode.BATTLE
         self.battling = enemy
+        # print(self.battling)
 
         # Save changes to DB after state change
         self.save_to_db()
@@ -157,7 +158,7 @@ class _Character(Actor):
 
         return True, self.level  # (leveled up, new level)
 
-    def die(self, player_id):
+    def die(self):
         cursor = self.db.cursor(buffered=True)
         sql_get = f"DELETE FROM characters WHERE user_id = {self.user_id}"
         cursor.execute(sql_get)

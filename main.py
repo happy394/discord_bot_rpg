@@ -5,7 +5,7 @@ from Content.Texts import *
 # discord commands
 class RpgBot(commands.Cog):
     def __init__(self):
-        self.db = connect_database()
+        self.db = db
 
     def add_user_to_db(self, user_id, name, age, race, clas):
         cursor = self.db.cursor(buffered=True)
@@ -101,10 +101,181 @@ class RpgBot(commands.Cog):
         user_id = ctx.author.id
         channel = ctx.channel
 
-# TODO 1. make confirm button inside 3rd button
-# TODO 2. create class to search for loot based on location
+
+def _db_to_class(value: dict):
+    character = Character_(name=value["name"],
+                           hp=value["hp"],
+                           max_hp=value["max_hp"],
+                           attack=value["attack"],
+                           defense=value["defense"],
+                           xp=value["xp"],
+                           gold=value["gold"],
+                           inventory=value["inventory"],
+                           mana=value["mana"],
+                           level=value["level"],
+                           mode=value["mode"],
+                           battling=value["battling"],
+                           location=value["location"],
+                           user_id=value["user_id"])
+
+    return character
+
+
+def _get_character_db(_id):
+    cursor = db.cursor(dictionary=True, buffered=True)  # returns db in dictionary style
+    sql_get = f"SELECT * FROM characters_2 WHERE user_id = {_id}"
+    cursor.execute(sql_get)
+    res = cursor.fetchall()
+    if res:
+        return _db_to_class(res[0])
+    else:
+        return None
+
+
+def _add_character_db(character):
+    cursor = db.cursor(buffered=True)
+    sql_insert = ("INSERT INTO characters_2 (name, hp, max_hp, attack, defense, xp, gold, inventory, mana, level, "
+                  "mode, battling, location, user_id) "
+                  "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+    cursor.execute(sql_insert, list(vars(character).values()))
+    db.commit()
 
 
 bot = commands.Bot(command_prefix=BOT_PREFIX, intents=Intents.all())
+MODE_COLOR = {
+    GameMode.BATTLE: 0xDC143C,
+    GameMode.ADVENTURE: 0x005EB8,
+}
+
+
+def status_embed(ctx, character):
+    mode_text = ""
+    # Current mode
+    if character.mode == GameMode.BATTLE:
+        mode_text = f"Currently battling a {character.battling.name}."
+    elif character.mode == GameMode.ADVENTURE:
+        mode_text = "Currently adventuring."
+
+    # Create embed with description as current mode
+    embed = discord.Embed(title=f"{character.name} status", description=mode_text, color=MODE_COLOR[character.mode])
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.avatar)
+
+    # Stats field
+    _, xp_needed = character.ready_to_level_up()
+
+    embed.add_field(name="Stats", value=f"""
+    **HP:**    {character.hp}/{character.max_hp}
+    **ATTACK:**   {character.attack}
+    **DEFENSE:**   {character.defense}
+    **MANA:**  {character.mana}
+    **LEVEL:** {character.level}
+    **XP:**    {character.xp}/{character.xp + xp_needed}
+        """, inline=True)
+
+    embed.add_field(name="", value="")
+
+    # Inventory field
+    inventory_text = f"Gold: {character.gold}\n"
+    inventory = character.inventory.split(',')
+    if inventory:
+        inventory_text += "\n".join(inventory)
+
+    embed.add_field(name="Inventory", value=inventory_text, inline=True)
+
+    return embed
+
+
+class rpg(commands.Cog):
+
+    @commands.command(name="create", help="Create a character")
+    async def _create(self, ctx, name=None):
+        if ctx.channel.id == 1224681797179281458:
+            user_id = ctx.message.author.id
+
+            # if no name is specified, use the creator's nickname
+            if not name:
+                name = ctx.message.author.name
+
+            if _get_character_db(user_id):
+                await ctx.reply(f"You already have a character! Check the **{BOT_PREFIX}status** command.")
+            else:
+                character = Character_(name=name,
+                                       hp=16,
+                                       max_hp=16,
+                                       attack=2,
+                                       defense=1,
+                                       xp=0,
+                                       gold=1,
+                                       inventory="Sword, Shield",
+                                       mana=0,
+                                       level=0,
+                                       mode=GameMode.ADVENTURE,
+                                       battling=None,
+                                       location="forest",
+                                       user_id=user_id)
+                try:
+                    _add_character_db(character)
+                except Exception:
+                    await ctx.reply(content="Something went wrong. Please try again.")
+                    raise Exception("Couldn't save character to a database")
+                finally:
+                    channel = bot.get_channel(1224635518839554099)
+                    print(ctx.author)
+                    await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
+                    await ctx.reply(content=f"Your character has been created successfully!\nYou are now located in the "
+                                            f"forest.\nCheck the **{BOT_PREFIX}status** command.")
+
+        else:
+            await ctx.reply(content="This command should be used in `character-creation` channel.")
+
+    @commands.command(name="status", help="Get information about your character")
+    async def _status(self, ctx):
+        character = _get_character_db(ctx.message.author.id)
+
+        if character:
+            embed = status_embed(ctx, character)
+            await ctx.message.reply(embed=embed)
+        else:
+            await ctx.reply(content=f"You don't have a character! Check the **{BOT_PREFIX}create** command")
+
+    @commands.command(name="explore", help="search for enemies in your location")
+    async def _explore(self, ctx):
+        await ctx.message.reply(content="This command is under development.")
+
+    @commands.command(name="hunt", help="Look for an enemy to fight.")
+    async def _hunt(self, ctx):
+        character = _get_character_db(ctx.message.author.id)
+
+        if character.mode != GameMode.ADVENTURE:
+            await ctx.message.reply("Can only call this command outside of battle!")
+            return
+
+        enemy = character.hunt()
+
+        # Send reply
+        await ctx.message.reply(f"You encounter a {enemy.name}. Do you `.fight` or `.flee`?. This command will work in "
+                                f"several days!")
+
+    @commands.command(name="level_up", help="Level up your character.")
+    async def _level_up(self, ctx, increase):
+        character = _get_character_db(ctx.message.author.id)
+        if character:
+            if character.mode != GameMode.ADVENTURE:
+                await ctx.message.reply("Can only call this command outside of battle!")
+                return
+
+            ready, xp_needed = character.ready_to_level_up()
+            if not ready:
+                await ctx.message.reply(f"You need another {xp_needed} to advance to level {character.level + 1}")
+                return
+
+            if not increase:
+                await ctx.message.reply("Please specify a stat to increase (HP, ATTACK, DEFENSE)")
+                return
+        else:
+            await ctx.reply(content=f"You don't have a character! Check the **{BOT_PREFIX}create** command")
+
+
 bot.add_cog(RpgBot())
+bot.add_cog(rpg())
 bot.run(BOT_TOKEN)
