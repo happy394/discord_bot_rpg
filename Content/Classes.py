@@ -2,12 +2,12 @@ import discord
 from discord import Game, Intents, ButtonStyle
 from discord.ui import View, Button
 from discord.ext import commands
+import psycopg2
 
 from settings import *
 import mysql.connector
 
-import enum, random, sys, pickle
-from copy import deepcopy
+import enum, random, sys, json
 
 
 # connect to database
@@ -27,7 +27,16 @@ db = connect_database()
 
 # Helper functions
 def str_to_class(classname):
-    return getattr(sys.modules[__name__], classname)
+    return getattr(sys.modules[__name__], classname["enemy"])
+
+
+def _get_enemy_db(_id):
+    cursor = db.cursor(buffered=True)
+    sql_get = f"SELECT battling FROM characters WHERE user_id = {_id}"
+    cursor.execute(sql_get)
+    x = cursor.fetchall()[0][0]
+    res = json.loads(x)
+    return res
 
 
 # Game modes
@@ -48,24 +57,26 @@ class Actor:
         self.xp = xp
         self.gold = gold
 
-    def fight(self, other):
+    def fight(self, other, item):
+        print(item, item.attack)
         defense = min(other.defense, 19)  # cap defense value
         chance_to_hit = random.randint(0, 20 - defense)
-        if chance_to_hit:
+        if chance_to_hit >= 5:
             damage = self.attack
         else:
             damage = 0
 
         other.hp -= damage
 
-        return self.attack, other.hp <= 0  # (damage, fatal)
+        return damage, other.hp <= 0  # (damage, fatal)
 
 
 class Character_(Actor):
     db = db
     level_cap = 10
 
-    def __init__(self, name, hp, max_hp, attack, defense, xp, gold, inventory, mana, level, mode, battling, location, user_id):
+    def __init__(self, name, hp, max_hp, attack, defense, xp, gold, inventory, mana, level, mode, battling, location,
+                 user_id):
         super().__init__(name, hp, max_hp, attack, defense, xp, gold)
         self.inventory = inventory
         self.mana = mana
@@ -73,9 +84,7 @@ class Character_(Actor):
         self.mode = mode
 
         if battling is not None:
-            enemy_class = str_to_class(battling["enemy"])
-            self.battling = enemy_class()
-            self.battling.rehydrate(**battling)
+            self.battling = battling
         else:
             self.battling = None
 
@@ -83,37 +92,51 @@ class Character_(Actor):
         self.user_id = user_id
 
     def save_to_db(self):
-        character_dict = deepcopy(vars(self))
-        print(self.battling)
-        if self.battling is not None:
-            character_dict["battling"] = deepcopy(vars(self.battling))
         cursor = self.db.cursor(buffered=True)
-        sql_formula = f"UPDATE characters_2 SET battling = %s WHERE user_id = {self.user_id}"
-        cursor.execute(sql_formula, [pickle.dumps(self.battling)])
+        sql_formula = (f"UPDATE characters SET battling = %s, "
+                       f"mode = %s,"
+                       f"xp = %s,"
+                       f"gold = %s,"
+                       f"hp = %s,"
+                       f"max_hp = %s,"
+                       f"level = %s,"
+                       f"attack = %s "
+                       f"WHERE user_id = {self.user_id}")
+        if self.battling:
+        # sql_formula2 = ("INSERT INTO enemies_by_users (user_id, name, max_hp, attack, defense, xp, gold) "
+        #                 "VALUES (%s, %s, %s, %s, %s, %s, %s)")
+            cursor.execute(sql_formula, (json.dumps(self.battling.__dict__), self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
+        else:
+            cursor.execute(sql_formula, (self.battling, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
+
+        # cursor.execute(sql_formula2, [self.battling.user_id,
+        #                               self.battling.name,
+        #                               self.battling.max_hp,
+        #                               self.battling.attack,
+        #                               self.battling.defense,
+        #                               self.battling.xp,
+        #                               self.battling.gold])
         self.db.commit()
+        return
 
     def hunt(self):
         # Generate random enemy to fight
         while True:
             enemy_type = random.choice(Enemy.__subclasses__())
-
             if enemy_type.min_level <= self.level:
                 break
 
-        enemy = enemy_type()
-
         # Enter battle mode
         self.mode = GameMode.BATTLE
-        self.battling = enemy
-        # print(self.battling)
+        self.battling = enemy_type()
 
         # Save changes to DB after state change
         self.save_to_db()
 
-        return enemy
+        return enemy_type()
 
-    def fight(self, enemy):
-        outcome = super().fight(enemy)
+    def fight(self, enemy, item):
+        outcome = super().fight(enemy, item)
 
         # Save changes to DB after state change
         self.save_to_db()
@@ -158,6 +181,24 @@ class Character_(Actor):
 
         return True, self.level  # (leveled up, new level)
 
+    def defeat(self, enemy):
+        if self.level < self.level_cap:  # no more XP after hitting level cap
+            self.xp += enemy.xp
+
+        self.gold += enemy.gold  # loot enemy
+
+        # Exit battle mode
+        self.battling = None
+        self.mode = GameMode.ADVENTURE
+
+        # Check if ready to level up after earning XP
+        ready, _ = self.ready_to_level_up()
+
+        # Save to DB after state change
+        self.save_to_db()
+
+        return enemy.xp, enemy.gold, ready
+
     def die(self):
         cursor = self.db.cursor(buffered=True)
         sql_get = f"DELETE FROM characters WHERE user_id = {self.user_id}"
@@ -168,81 +209,88 @@ class Character_(Actor):
 
 class Enemy(Actor):
 
-    def __init__(self, name, max_hp, attack, defense, xp, gold):
-        super().__init__(name, max_hp, max_hp, attack, defense, xp, gold)
+    def __init__(self, name, hp, max_hp, attack, defense, xp, gold):
+        super().__init__(name, hp, max_hp, attack, defense, xp, gold)
         self.enemy = self.__class__.__name__
-
-    def rehydrate(self, name, hp, max_hp, attack, defense, xp, gold, enemy):
-        self.name = name
-        self.hp = hp
-        self.max_hp = max_hp
-        self.attack = attack
-        self.defense = defense
-        self.xp = xp
-        self.gold = gold
 
 
 class GiantRat(Enemy):
     min_level = 1
 
     def __init__(self):
-        super().__init__("🐀 Giant Rat", 2, 1, 1, 1, 1)  # HP, attack, defense, XP, gold
+        super().__init__("🐀 Giant Rat", 2, 2, 1, 1, 1, 1)  # HP, attack, defense, XP, gold
 
 
 class GiantSpider(Enemy):
     min_level = 1
 
     def __init__(self):
-        super().__init__("🕷️ Giant Spider", 3, 2, 1, 1, 2)  # HP, attack, defense, XP, gold
+        super().__init__("🕷️ Giant Spider", 3, 3, 2, 1, 1, 2)  # HP, attack, defense, XP, gold
 
 
 class Bat(Enemy):
     min_level = 1
 
     def __init__(self):
-        super().__init__("🦇 Bat", 4, 2, 1, 2, 1)  # HP, attack, defense, XP, gold
+        super().__init__("🦇 Bat", 4, 4, 2, 1, 2, 1)  # HP, attack, defense, XP, gold
 
 
 class Crocodile(Enemy):
     min_level = 2
 
     def __init__(self):
-        super().__init__("🐊 Crocodile", 5, 3, 1, 2, 2)  # HP, attack, defense, XP, gold
+        super().__init__("🐊 Crocodile", 5, 5, 3, 1, 2, 2)  # HP, attack, defense, XP, gold
 
 
 class Wolf(Enemy):
     min_level = 2
 
     def __init__(self):
-        super().__init__("🐺 Wolf", 6, 3, 2, 2, 2)  # HP, attack, defense, XP, gold
+        super().__init__("🐺 Wolf", 6, 6, 3, 2, 2, 2)  # HP, attack, defense, XP, gold
 
 
 class Poodle(Enemy):
     min_level = 3
 
     def __init__(self):
-        super().__init__("🐩 Poodle", 7, 4, 1, 3, 3)  # HP, attack, defense, XP, gold
+        super().__init__("🐩 Poodle", 7, 7, 4, 1, 3, 3)  # HP, attack, defense, XP, gold
 
 
 class Snake(Enemy):
     min_level = 3
 
     def __init__(self):
-        super().__init__("🐍 Snake", 8, 4, 2, 3, 3)  # HP, attack, defense, XP, gold
+        super().__init__("🐍 Snake", 8, 8, 4, 2, 3, 3)  # HP, attack, defense, XP, gold
 
 
 class Lion(Enemy):
     min_level = 4
 
     def __init__(self):
-        super().__init__("🦁 Lion", 9, 5, 1, 4, 4)  # HP, attack, defense, XP, gold
+        super().__init__("🦁 Lion", 9, 9, 5, 1, 4, 4)  # HP, attack, defense, XP, gold
 
 
 class Dragon(Enemy):
     min_level = 5
 
     def __init__(self):
-        super().__init__("🐉 Dragon", 10, 6, 2, 5, 5)  # HP, attack, defense, XP, gold
+        super().__init__("🐉 Dragon", 10, 10, 6, 2, 5, 5)  # HP, attack, defense, XP, gold
+
+
+# items
+class Item:
+    def __init__(self, name, min_level, attack, defense, mana, gold):
+        self.name = name
+        self.min_level = min_level
+        self.attack = attack
+        self.defense = defense
+        self.mana = mana
+        self.gold = gold
+
+
+class Sword(Item):
+    def __init__(self):
+        super().__init__("Sword", 1, 2, 0, 0, 5)
 
 
 class Character:
