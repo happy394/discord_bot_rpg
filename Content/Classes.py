@@ -5,14 +5,12 @@ from discord.ext import commands
 import psycopg2
 
 from settings import *
-import mysql.connector
 
 import enum, random, sys, json
 
 
-# connect to database
 def connect_database():
-    connection = mysql.connector.connect(
+    connection = psycopg2.connect(
         host=DB_HOST,
         user=DB_USER,
         password=DB_PASSWORD,
@@ -30,22 +28,38 @@ def str_to_class(classname):
     return getattr(sys.modules[__name__], classname["enemy"])
 
 
-def _get_enemy_db(_id):
-    cursor = db.cursor(buffered=True)
-    sql_get = f"SELECT battling FROM characters WHERE user_id = {_id}"
+def get_enemy_db(_id):
+    cursor = db.cursor()
+    sql_get = f"SELECT battling FROM character WHERE user_id = {_id}"
     cursor.execute(sql_get)
     x = cursor.fetchall()[0][0]
     res = json.loads(x)
     return res
 
 
-# Game modes
+def get_items_db(character_class):
+    cursor = db.cursor()
+    res = []
+    sql_item = (f"SELECT name, gold, description, weight, additional FROM item "
+                f"WHERE name IN({str(character_class.inventory).replace("[", "").replace("]", "")})")
+    cursor.execute(sql_item)
+    a = cursor.fetchall()
+    for i in a:
+        buff = []
+        for j in range(4):
+            buff.append(i[j])
+        buff.append(i[4])
+        item = Item(*buff)
+        res.append(item)
+
+    return res
+
+
 class GameMode(enum.IntEnum):
     ADVENTURE = 1
     BATTLE = 2
 
 
-# Living creatures
 class Actor:
 
     def __init__(self, name, hp, max_hp, attack, defense, xp, gold):
@@ -71,29 +85,26 @@ class Actor:
         return damage, other.hp <= 0  # (damage, fatal)
 
 
-class Character_(Actor):
+class Character(Actor):
     db = db
     level_cap = 10
 
-    def __init__(self, name, hp, max_hp, attack, defense, xp, gold, inventory, mana, level, mode, battling, location,
-                 user_id):
+    def __init__(self, user_id, name, level, xp, hp, max_hp, gold, attack, defense, battling, location, mode, inventory):
         super().__init__(name, hp, max_hp, attack, defense, xp, gold)
-        self.inventory = inventory
-        self.mana = mana
-        self.level = level
-        self.mode = mode
-
-        if battling is not None:
-            self.battling = battling
-        else:
-            self.battling = None
-
-        self.location = location
         self.user_id = user_id
+        self.level = level
+        self.battling = battling
+        self.location = location
+        self.mode = mode
+        self.inventory = inventory
+
+        # remake list into list of classes
+        if self.inventory:
+            self.inventory = get_items_db(self)
 
     def save_to_db(self):
-        cursor = self.db.cursor(buffered=True)
-        sql_formula = (f"UPDATE characters SET battling = %s, "
+        cursor = self.db.cursor()
+        sql_formula = (f"UPDATE character SET battling = %s, "
                        f"mode = %s,"
                        f"xp = %s,"
                        f"gold = %s,"
@@ -103,19 +114,9 @@ class Character_(Actor):
                        f"attack = %s "
                        f"WHERE user_id = {self.user_id}")
         if self.battling:
-        # sql_formula2 = ("INSERT INTO enemies_by_users (user_id, name, max_hp, attack, defense, xp, gold) "
-        #                 "VALUES (%s, %s, %s, %s, %s, %s, %s)")
-            cursor.execute(sql_formula, (json.dumps(self.battling.__dict__), self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
+            cursor.execute(sql_formula, (self.battling.name, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
         else:
             cursor.execute(sql_formula, (self.battling, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
-
-        # cursor.execute(sql_formula2, [self.battling.user_id,
-        #                               self.battling.name,
-        #                               self.battling.max_hp,
-        #                               self.battling.attack,
-        #                               self.battling.defense,
-        #                               self.battling.xp,
-        #                               self.battling.gold])
         self.db.commit()
         return
 
@@ -200,8 +201,8 @@ class Character_(Actor):
         return enemy.xp, enemy.gold, ready
 
     def die(self):
-        cursor = self.db.cursor(buffered=True)
-        sql_get = f"DELETE FROM characters WHERE user_id = {self.user_id}"
+        cursor = self.db.cursor()
+        sql_get = f"DELETE FROM character WHERE user_id = {self.user_id}"
         cursor.execute(sql_get)
         self.db.commit()
         return
@@ -279,34 +280,12 @@ class Dragon(Enemy):
 
 # items
 class Item:
-    def __init__(self, name, min_level, attack, defense, mana, gold):
+    def __init__(self, name, gold, description, weight, external):
         self.name = name
-        self.min_level = min_level
-        self.attack = attack
-        self.defense = defense
-        self.mana = mana
         self.gold = gold
-
-
-class Sword(Item):
-    def __init__(self):
-        super().__init__("Sword", 1, 2, 0, 0, 5)
-
-
-class Character:
-    def __init__(self, name, age, race, clas):
-        self.name = name
-        self.age = age
-        self.race = race
-        self.clas = clas
-        self.attack = 5
-        self.defence = 5
-        self.inventory = {"sword": 5}
-
-    def print_character(self):
-        return (f"Your character: ```Name: {self.name}\nAge: {self.age}\n"
-                f"Race: {self.race}\n"
-                f"Class: {self.clas}\n```")
+        self.description = description
+        self.weight = weight
+        self.external = external
 
 
 classes_list = ["Warrior", "Wizard", "Rogue", "Healer"]
