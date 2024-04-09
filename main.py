@@ -1,5 +1,4 @@
 from Content.Classes import *
-from Content.Texts import *
 
 
 class RpgBot(commands.Cog):
@@ -102,20 +101,23 @@ class RpgBot(commands.Cog):
     #     channel = ctx.channel
 
 
-def create_character_db(character_dict):
+def create_character_db(character):
     cursor = db.cursor()
     sql = ('INSERT INTO character '
            '(user_id, name, level, xp, hp, max_hp, gold, attack, defense, battling, location, mode) '
            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)')
     sql2 = ('INSERT INTO characters_inventories'
-            '(user_id, title)'
-            'VALUES (%s, %s)')
-    cursor.execute(sql, (character_dict["user_id"], character_dict["name"], character_dict["level"], character_dict["xp"],
-                         character_dict["hp"], character_dict["max_hp"], character_dict["gold"],
-                         character_dict["attack"], character_dict["defense"], character_dict["battling"],
-                         character_dict["location"], character_dict["gamemode"]))
-    for i in character_dict["inventory"]:
-        cursor.execute(sql2, (character_dict["user_id"], i))
+            '(user_id, title, amount)'
+            'VALUES (%s, %s, %s)')
+
+    cursor.execute(sql, (character.user_id, character.name, character.level, character.xp,
+                         character.hp, character.max_hp, character.gold,
+                         character.attack, character.defense, character.battling,
+                         character.location, character.mode))
+    if character.inventory:
+        for i in character.inventory:
+            cursor.execute(sql2, (character.user_id, i.name, 1))
+
     db.commit()
 
 
@@ -123,13 +125,19 @@ def get_character_db(_id):
     cursor = db.cursor()
     sql_character = f'SELECT * FROM character WHERE user_id = {_id}'
     sql_inventory = f'SELECT title FROM characters_inventories WHERE user_id = {_id}'
+
     cursor.execute(sql_character)
     res = cursor.fetchall()
     cursor.execute(sql_inventory)
     res += cursor.fetchall()
-    character = Character(*res[0], [])
+
+    if not res:
+        return None
+
+    character = Character(*res[0], inventory=[])
     for i in res[1:]:
         character.inventory.append(*i)
+
     return character
 
 
@@ -181,7 +189,7 @@ class Rpg(commands.Cog):
 
     @commands.command(name="create", help="Create a character")
     async def _create(self, ctx, name=None):
-        if ctx.channel.id == 1224681797179281458:
+        if ctx.channel.id == 1224681797179281458 or ctx.channel.id == 878623706908352565:
             user = ctx.message.author
 
             # if no name is specified, use the creator's nickname
@@ -192,21 +200,22 @@ class Rpg(commands.Cog):
                 role = discord.Role
                 role.id = 1224683255744168040
 
-                character = {
-                    'user_id': user.id,
-                    'name': name,
-                    'level': 1,
-                    'xp': 0,
-                    'hp': 10,
-                    'max_hp': 10,
-                    'gold': 5,
-                    'inventory': ["Wooden sword", "Shield"],
-                    'attack': 5,
-                    'defense': 5,
-                    'battling': None,
-                    'location': "forest",
-                    'gamemode': GameMode.ADVENTURE,
-                }
+                character = Character(
+                    user_id=user.id,
+                    name=name,
+                    level=1,
+                    xp=0,
+                    hp=10,
+                    max_hp=10,
+                    gold=5,
+                    attack=2,
+                    defense=5,
+                    battling=None,
+                    location="forest",
+                    mode=GameMode.ADVENTURE,
+                    inventory=["Wooden sword", "Shield"]
+                )
+
                 try:
                     create_character_db(character)
                 except Exception:
@@ -227,48 +236,51 @@ class Rpg(commands.Cog):
     async def _status(self, ctx):
         character = get_character_db(ctx.message.author.id)
 
-        if character:
+        if not character:
+            await ctx.reply(content=f"You don't have a character! Check the **{BOT_PREFIX}create** command")
+        else:
             embed = status_embed(ctx, character)
             await ctx.message.reply(embed=embed)
-        else:
-            await ctx.reply(content=f"You don't have a character! Check the **{BOT_PREFIX}create** command")
 
-    @commands.command(name="explore", help="search for enemies in your location")
+    @commands.command(name="explore", help="Search for enemies in your location")
     async def _explore(self, ctx):
         await ctx.message.reply(content="Sorry! This command is currently under development.")
 
     @commands.command(name="hunt", help="Look for an enemy to fight.")
     async def _hunt(self, ctx):
-        character = get_character_db(ctx.message.author.id)
+        if ctx.channel.id in [1224681797179281458, 1224683073212518591]:
+            await ctx.reply("You can't hunt in this channel.")
+        else:
+            character = get_character_db(ctx.message.author.id)
 
-        if character.mode != GameMode.ADVENTURE:
-            await ctx.message.reply("Can only call this command outside of battle!")
-            return
+            if character.mode != GameMode.ADVENTURE:
+                await ctx.message.reply("Can only call this command outside of battle!")
+                return
 
-        enemy = character.hunt()
+            enemy = character.hunt()
 
-        # Send reply
-        await ctx.message.reply(f"You encounter a {enemy.name}. Do you `.fight` or `.flee`?. This command will work in "
-                                f"several days!")
+            await ctx.message.reply(f"You encounter a {enemy.name}. "
+                                    f"Do you `.fight` or `.flee`?."
+                                    f"\n`.flee` command will work in several days!")
 
     @commands.command(name="fight", help="Fight the current enemy.")
-    async def fight(self, ctx, item=None):
-        character = get_character_db(ctx.message.author.id)
-
+    async def fight(self, ctx, *, item_given=None):
+        user = ctx.message.author
+        character = get_character_db(user.id)
         if character.mode != GameMode.BATTLE:
             await ctx.message.reply("Can only call this command in battle!")
             return
-        if item in character.inventory:
-            item_class = getattr(sys.modules[__name__], item)
-            print(vars(item_class).values())
-        else:
-            item_class = None
 
         # Simulate battle
+        item = get_item_db(item_given)
+        if item == 0:
+            await ctx.message.reply("You don't have this item or typed its name wrong. Please try again!")
+            return
+
         enemy = character.battling
 
         # Character attacks
-        damage, killed = character.fight(enemy, item_class)
+        damage, killed = character.fight(enemy, item)
         if damage != 0:
             await ctx.message.reply(f"{character.name} attacks {enemy.name}, dealing {damage} damage!")
         else:
@@ -279,16 +291,19 @@ class Rpg(commands.Cog):
             xp, gold, ready_to_level_up = character.defeat(enemy)
 
             await ctx.message.reply(
-                f"{character.name} vanquished the {enemy.name}, earning {xp} XP and {gold} GOLD. HP: {character.hp}/{character.max_hp}.")
+                f"{character.name} vanquished the {enemy.name}, earning {xp} XP and {gold} GOLD. "
+                f"HP: {character.hp}/{character.max_hp}.")
 
             if ready_to_level_up:
                 await ctx.message.reply(
-                    f"{character.name} has earned enough XP to advance to level {character.level + 1}. Enter `!levelup` with the stat (HP, ATTACK, DEFENSE) you would like to increase. e.g. `!levelup hp` or `!levelup attack`.")
+                    f"{character.name} has earned enough XP to advance to level {character.level + 1}. "
+                    f"Enter `{BOT_PREFIX}levelup` with the stat (HP, ATTACK, DEFENSE) you would like to increase. e.g. "
+                    f"`{BOT_PREFIX}levelup hp` or `{BOT_PREFIX}levelup attack`.")
 
             return
 
         # Enemy attacks
-        damage, killed = enemy.fight(character)
+        damage, killed = enemy.fight(character, None)
         if damage != 0:
             await ctx.message.reply(f"{enemy.name} attacks {character.name}, dealing {damage} damage!")
         else:
@@ -358,7 +373,7 @@ class Rpg(commands.Cog):
 
         character.die()
 
-        await ctx.message.reply(f"Character {character.name} is no more. Create a new one with `!create`.")
+        await ctx.message.reply(f"Character {character.name} is no more. Create a new one with `{BOT_PREFIX}create`.")
 
     # @commands.command(name="reset", help="[DEV] Destroy and recreate current character.")
     # async def reset(self, ctx):

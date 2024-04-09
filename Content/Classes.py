@@ -30,11 +30,12 @@ def str_to_class(classname):
 
 def get_enemy_db(_id):
     cursor = db.cursor()
-    sql_get = f"SELECT battling FROM character WHERE user_id = {_id}"
-    cursor.execute(sql_get)
-    x = cursor.fetchall()[0][0]
-    res = json.loads(x)
-    return res
+    sql_get_enemy = f"SELECT battling FROM character WHERE user_id = {_id}"
+    cursor.execute(sql_get_enemy)
+    buff = cursor.fetchone()[0]
+    enemy = Enemy(buff["level_req"], buff["name"], buff["hp"], buff["max_hp"], buff["attack"], buff["defense"],
+                  buff["xp"], buff["gold"], buff["location"])
+    return enemy
 
 
 def get_items_db(character_class):
@@ -42,9 +43,9 @@ def get_items_db(character_class):
     res = []
     sql_item = (f"SELECT name, gold, description, weight, additional FROM item "
                 f"WHERE name IN({str(character_class.inventory).replace("[", "").replace("]", "")})")
+
     cursor.execute(sql_item)
-    a = cursor.fetchall()
-    for i in a:
+    for i in cursor.fetchall():
         buff = []
         for j in range(4):
             buff.append(i[j])
@@ -53,6 +54,18 @@ def get_items_db(character_class):
         res.append(item)
 
     return res
+
+
+def get_item_db(item_name):
+    if not item_name:
+        return None
+    cursor = db.cursor()
+    sql_item = f"SELECT name, gold, description, weight, additional FROM item WHERE name = '{item_name}'"
+    cursor.execute(sql_item)
+    fetching = cursor.fetchone()
+    if not fetching:
+        return 0
+    return Item(*fetching)
 
 
 class GameMode(enum.IntEnum):
@@ -72,11 +85,10 @@ class Actor:
         self.gold = gold
 
     def fight(self, other, item):
-        print(item, item.attack)
         defense = min(other.defense, 19)  # cap defense value
         chance_to_hit = random.randint(0, 20 - defense)
         if chance_to_hit >= 5:
-            damage = self.attack
+            damage = (self.attack + item.additional["attack"]) if item else self.attack
         else:
             damage = 0
 
@@ -93,7 +105,7 @@ class Character(Actor):
         super().__init__(name, hp, max_hp, attack, defense, xp, gold)
         self.user_id = user_id
         self.level = level
-        self.battling = battling
+        self.battling = get_enemy_db(self.user_id) if battling else None
         self.location = location
         self.mode = mode
         self.inventory = inventory
@@ -102,6 +114,7 @@ class Character(Actor):
         if self.inventory:
             self.inventory = get_items_db(self)
 
+    # finish saving enemy in db
     def save_to_db(self):
         cursor = self.db.cursor()
         sql_formula = (f"UPDATE character SET battling = %s, "
@@ -113,28 +126,30 @@ class Character(Actor):
                        f"level = %s,"
                        f"attack = %s "
                        f"WHERE user_id = {self.user_id}")
+
         if self.battling:
-            cursor.execute(sql_formula, (self.battling.name, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
+            cursor.execute(sql_formula, (json.dumps(self.battling.__dict__), self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
         else:
-            cursor.execute(sql_formula, (self.battling, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
+            cursor.execute(sql_formula, (None, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level, self.attack))
         self.db.commit()
         return
 
     def hunt(self):
-        # Generate random enemy to fight
         while True:
-            enemy_type = random.choice(Enemy.__subclasses__())
-            if enemy_type.min_level <= self.level:
+            cursor = db.cursor()
+            cursor.execute('SELECT level_req, name, hp, max_hp, attack, defense, xp, gold, location FROM enemy')
+            enemy = Enemy(*random.choice(cursor.fetchall()))
+            if enemy.level_req <= self.level:
                 break
 
         # Enter battle mode
         self.mode = GameMode.BATTLE
-        self.battling = enemy_type()
+        self.battling = enemy
 
         # Save changes to DB after state change
         self.save_to_db()
 
-        return enemy_type()
+        return enemy
 
     def fight(self, enemy, item):
         outcome = super().fight(enemy, item)
@@ -202,17 +217,18 @@ class Character(Actor):
 
     def die(self):
         cursor = self.db.cursor()
-        sql_get = f"DELETE FROM character WHERE user_id = {self.user_id}"
-        cursor.execute(sql_get)
-        self.db.commit()
+        cursor.execute(f"DELETE FROM characters_inventories WHERE user_id = {self.user_id}")
+        cursor.execute(f"DELETE FROM character WHERE user_id = {self.user_id}")
+        db.commit()
         return
 
 
 class Enemy(Actor):
 
-    def __init__(self, name, hp, max_hp, attack, defense, xp, gold):
+    def __init__(self, level_req, name, hp, max_hp, attack, defense, xp, gold, location):
         super().__init__(name, hp, max_hp, attack, defense, xp, gold)
-        self.enemy = self.__class__.__name__
+        self.level_req = level_req
+        self.location = location
 
 
 class GiantRat(Enemy):
@@ -280,41 +296,41 @@ class Dragon(Enemy):
 
 # items
 class Item:
-    def __init__(self, name, gold, description, weight, external):
+    def __init__(self, name, gold, description, weight, additional):
         self.name = name
         self.gold = gold
         self.description = description
         self.weight = weight
-        self.external = external
+        self.additional = additional
 
 
-classes_list = ["Warrior", "Wizard", "Rogue", "Healer"]
-races_list = ["Human", "Elf", "Dwarf", "Ork"]
+# classes_list = ["Warrior", "Wizard", "Rogue", "Healer"]
+# races_list = ["Human", "Elf", "Dwarf", "Ork"]
 
 
-class RaceView(View):
-    answer = None
-    options = []
-    for i in races_list:
-        options.append(discord.SelectOption(label=f"{i}", value=f"{i}"))
-
-    @discord.ui.select(placeholder="Choose your race:", options=options)
-    async def select_class(self, select: discord.ui.Select, interaction):
-        self.answer = select
-        select.disabled = True
-        await interaction.response.edit_message(view=self)
-        self.stop()
-
-
-class ClassView(View):
-    answer1 = None
-    options = []
-    for i in classes_list:
-        options.append(discord.SelectOption(label=f"{i}", value=f"{i}"))
-
-    @discord.ui.select(placeholder="Choose your class:", options=options)
-    async def select_class(self, select: discord.ui.Select, interaction):
-        self.answer1 = select
-        select.disabled = True
-        await interaction.response.edit_message(view=self)
-        self.stop()
+# class RaceView(View):
+#     answer = None
+#     options = []
+#     for i in races_list:
+#         options.append(discord.SelectOption(label=f"{i}", value=f"{i}"))
+#
+#     @discord.ui.select(placeholder="Choose your race:", options=options)
+#     async def select_class(self, select: discord.ui.Select, interaction):
+#         self.answer = select
+#         select.disabled = True
+#         await interaction.response.edit_message(view=self)
+#         self.stop()
+#
+#
+# class ClassView(View):
+#     answer1 = None
+#     options = []
+#     for i in classes_list:
+#         options.append(discord.SelectOption(label=f"{i}", value=f"{i}"))
+#
+#     @discord.ui.select(placeholder="Choose your class:", options=options)
+#     async def select_class(self, select: discord.ui.Select, interaction):
+#         self.answer1 = select
+#         select.disabled = True
+#         await interaction.response.edit_message(view=self)
+#         self.stop()
