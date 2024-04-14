@@ -55,7 +55,7 @@ def get_items_db(character_class):
 def get_item_db(item_name):
     if not item_name:
         return None
-    sql_item = f"SELECT name, gold, description, weight, additional FROM item WHERE name = '{item_name}'"
+    sql_item = f"SELECT name, category, gold, description, weight, additional FROM item WHERE name = '{item_name}'"
     cursor.execute(sql_item)
     fetching = cursor.fetchone()
     if not fetching:
@@ -94,8 +94,9 @@ class Actor:
 
 
 class Item:
-    def __init__(self, name, gold, description, weight, additional):
+    def __init__(self, name, category, gold, description, weight, additional):
         self.name = name
+        self.category = category
         self.gold = gold
         self.description = description
         self.weight = weight
@@ -103,7 +104,7 @@ class Item:
 
 
 class Character(Actor):
-    level_cap = 10
+    level_cap = 15
 
     def __init__(self, user_id, name, level, xp, hp, max_hp, gold, attack, defense, battling, location, mode, thread,
                  inventory):
@@ -131,6 +132,7 @@ class Character(Actor):
                        f"attack = %s, "
                        f"thread = %s "
                        f"WHERE user_id = {self.user_id}")
+        sql_formula_inventory = f"INSERT INTO characters_inventories (user_id, title, amount) VALUES (%s, %s, %s)"
 
         if self.battling:
             cursor.execute(sql_formula, (json.dumps(self.battling.__dict__), self.mode, self.xp, self.gold, self.hp,
@@ -138,9 +140,15 @@ class Character(Actor):
         else:
             cursor.execute(sql_formula, (None, self.mode, self.xp, self.gold, self.hp, self.max_hp, self.level,
                                          self.attack, self.thread))
-
         db.commit()
         return
+
+    def use(self, item):
+        if item.category == "healing":
+            self.hp += item.additional["hp"]
+            if self.hp > self.max_hp:
+                self.hp = self.max_hp
+            self.save_to_db()
 
     def hunt(self):
         while True:
