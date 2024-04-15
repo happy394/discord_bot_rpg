@@ -37,15 +37,15 @@ def get_enemy_db(_id):
 
 def get_items_db(character_class):
     res = []
-    sql_item = (f"SELECT name, gold, description, weight, additional FROM item "
+    sql_item = (f"SELECT name, gold, description, weight, additional, category FROM item "
                 f"WHERE name IN({str(character_class.inventory).replace("[", "").replace("]", "")})")
 
     cursor.execute(sql_item)
     for i in cursor.fetchall():
         buff = []
-        for j in range(4):
+        for j in range(5):
             buff.append(i[j])
-        buff.append(i[4])
+        buff.append(i[5])
         item = Item(*buff)
         res.append(item)
 

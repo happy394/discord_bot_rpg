@@ -3,7 +3,7 @@ from Content.Classes import *
 
 
 # functions
-def status_embed(ctx, character):
+def status_embed(ctx, character) -> discord.Embed:
     mode_color = {
         GameMode.BATTLE: 0xDC143C,
         GameMode.ADVENTURE: 0x005EB8,
@@ -92,7 +92,7 @@ class Rpg(commands.Cog):
 
     @commands.command(name="create", help="Create a character")
     async def _create(self, ctx, name=None):
-        if ctx.channel.id == 1224681797179281458:
+        if ctx.channel.id == 1224681797179281458 or ctx.channel.id == 878623706908352565:
             user = ctx.message.author
 
             # if no name is specified, use the creator's nickname
@@ -130,7 +130,7 @@ class Rpg(commands.Cog):
 
                 await user.add_roles(role)
                 await ctx.reply(content=f"Your character has been created successfully!\nYou are now located in the "
-                                        f"forest.\nCheck the **{BOT_PREFIX}status** and **{BOT_PREFIX}hunt**"
+                                        f"forest.\nCheck the **{BOT_PREFIX}status** and **{BOT_PREFIX}hunt** "
                                         f"commands.")
 
         else:
@@ -222,7 +222,6 @@ class Rpg(commands.Cog):
                         f"e.g. "
                         f"`{BOT_PREFIX}levelup hp` or `{BOT_PREFIX}levelup attack`.")
 
-                # await channel.delete()
                 return
 
             # Enemy attacks
@@ -238,13 +237,16 @@ class Rpg(commands.Cog):
             # End battle in death if character killed
             if killed:
                 character.die()
+                thread_channel = bot.get_channel(thread)
+                await thread_channel.delete()
+                channel = discord.utils.get(ctx.guild.channels, name=character.location)
 
-                await ctx.message.reply(
+                await channel.send(
                     f"{character.name} was defeated by a {enemy.name} and is no more. Rest in peace, brave adventurer.")
                 return
 
             # No deaths, battle continues
-            await ctx.message.reply(f"The battle rages on! Do you `.attack` or `.flee`?")
+            await ctx.message.reply(f"The battle rages on! Do you `{BOT_PREFIX}attack` or `{BOT_PREFIX}flee`?")
         else:
             await ctx.message.reply("You can't fight outside your thread.")
 
@@ -313,10 +315,13 @@ class Rpg(commands.Cog):
     @commands.command(name="die", help="Destroy current character.")
     async def die(self, ctx):
         character = get_character_db(ctx.message.author.id)
-
+        if character.thread:
+            channel = bot.get_channel(character.thread)
+            await channel.delete()
+        channel_send = discord.utils.get(ctx.guild.channels, name=character.location)
         character.die()
 
-        await ctx.message.reply(f"Character {character.name} is no more. Create a new one with `{BOT_PREFIX}create`.")
+        await channel_send.send(f"Character {character.name} is no more. Create a new one with `{BOT_PREFIX}create`.")
 
     # gives only one item
     @commands.command(name="give_", help="Give a character something. For admin :3")
