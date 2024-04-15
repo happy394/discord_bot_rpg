@@ -132,8 +132,6 @@ class Character(Actor):
                        f"attack = %s, "
                        f"thread = %s "
                        f"WHERE user_id = {self.user_id}")
-        sql_formula_inventory = f"INSERT INTO characters_inventories (user_id, title, amount) VALUES (%s, %s, %s)"
-
         if self.battling:
             cursor.execute(sql_formula, (json.dumps(self.battling.__dict__), self.mode, self.xp, self.gold, self.hp,
                                          self.max_hp, self.level, self.attack, self.thread))
@@ -149,6 +147,17 @@ class Character(Actor):
             if self.hp > self.max_hp:
                 self.hp = self.max_hp
             self.save_to_db()
+        cursor.execute("SELECT amount FROM characters_inventories WHERE user_id = %s AND title = %s",
+                       (self.user_id, f'{item.name}'))
+        item_amount = cursor.fetchone()[0]
+        if item_amount > 1:
+            cursor.execute("UPDATE characters_inventories SET amount = %s WHERE user_id = %s AND title = %s",
+                           (item_amount - 1, self.user_id, f'{item.name}'))
+        else:
+            cursor.execute("DELETE FROM characters_inventories WHERE user_id = %s AND title = %s",
+                           (self.user_id, f'{item.name}'))
+        db.commit()
+        return item_amount - 1
 
     def hunt(self):
         while True:

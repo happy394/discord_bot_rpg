@@ -275,13 +275,18 @@ class Rpg(commands.Cog):
 
     @commands.command(name="use", help="Use item from inventory.")
     async def use(self, ctx, *, item):
-        character = get_character_db(ctx.message.author.id)
+        message = ctx.message
+        character = get_character_db(message.author.id)
         item = get_item_db(item)
+
         if item.name not in character.inventory:
-            await ctx.message.reply("It seems that you don't have that item or typed its name wrong. Please try again!")
+            await message.reply("It seems that you don't have that item or typed its name wrong. Please try again!")
         else:
-            character.use(item)
-            await ctx.message.reply(f"{character.name} uses {item.name}")
+            amount = character.use(item)
+            if amount > 0:
+                await message.reply(f"{character.name} uses {item.name}. Now you have {amount} of {item.name}.")
+            else:
+                await message.reply("Now you don't have that item.")
 
     @commands.command(name="levelup", help="Level up your character.")
     # implement buttons to choose which characteristics to upgrade or make an additional command for that
@@ -313,27 +318,29 @@ class Rpg(commands.Cog):
 
         await ctx.message.reply(f"Character {character.name} is no more. Create a new one with `{BOT_PREFIX}create`.")
 
+    # gives only one item
     @commands.command(name="give_", help="Give a character something. For admin :3")
     @commands.has_permissions(administrator=True)
     async def give(self, ctx, user_id, *, item):
         character = get_character_db(user_id)
-        item = get_item_db(item)
-        if item.name not in character.inventory:
-            character.inventory.append(item.name)
-            cursor.execute("INSERT INTO characters_inventories (user_id, title, amount) "
-                           "VALUES (%s, %s, %s)", (user_id, f'{item.name}', 1))
+        if get_item_db(item):
+            if item not in character.inventory:
+                cursor.execute("INSERT INTO characters_inventories (user_id, title, amount) "
+                               "VALUES (%s, %s, %s)", (user_id, f'{item}', 1))
+            else:
+                cursor.execute("SELECT amount FROM characters_inventories WHERE user_id = %s AND title = %s",
+                               (user_id, f'{item}'))
+                item_amount = cursor.fetchone()[0]
+                cursor.execute("UPDATE characters_inventories SET amount = %s WHERE user_id = %s AND title = %s",
+                               (item_amount+1, user_id, f'{item}'))
+
+            await ctx.message.reply(f"{character.name} was blessed with {item} by gods.")
             db.commit()
-            await ctx.message.reply(f"{character.name} was blessed with {item.name} by gods.")
         else:
-            cursor.execute("SELECT amount FROM characters_inventories WHERE user_id = %s AND title = %s",
-                           (user_id, f'{item.name}'))
-            item_amount = cursor.fetchone()[0]
-            cursor.execute("UPDATE characters_inventories SET amount = %s WHERE user_id = %s AND title = %s",
-                           (item_amount+1, user_id, f'{item.name}'))
-            db.commit()
-            await ctx.message.reply(f"{character.name} was blessed with {item.name} by gods.")
+            await ctx.message.reply("There is no such item.")
 
     # add command that changes users location and deletes thread
+
     # @commands.command(name="reset", help="[DEV] Destroy and recreate current character.")
     # async def reset(self, ctx):
     #     user_id = str(ctx.message.author.id)
